@@ -26,8 +26,9 @@ This system implements **Agent B**, which receives natural language questions fr
 │   ├── __init__.py
 │   ├── agent.py              # Agent B implementation
 │   ├── navigator.py          # Web navigation logic
-│   ├── screenshot.py         # Screenshot capture system
-│   └── tasks.py             # Task definitions and workflows
+│   ├── screenshot.py        # Screenshot capture system
+│   ├── config.py             # Configuration constants
+│   └── logger.py             # Logging utility
 ├── dataset/                  # Captured UI states organized by task
 ├── screenshots/             # Temporary screenshot storage
 ├── requirements.txt
@@ -51,10 +52,11 @@ This system implements **Agent B**, which receives natural language questions fr
    ```
 
 3. **Configure Environment**
+   Create a `.env` file in the root directory:
    ```bash
-   cp .env.example .env
-   # Add your Groq API key to .env
+   echo "GROQ_API_KEY=your_groq_api_key_here" > .env
    ```
+   Replace `your_groq_api_key_here` with your actual Groq API key from https://console.groq.com
 
 4. **Run the Agent**
    ```bash
@@ -155,11 +157,13 @@ python test.py
 
 This will execute predefined test tasks and capture their UI states.
 
-## Deliverables
+## Features
 
-1. **Code**: Complete implementation in this repository
-2. **Loom Video**: [Link to be added] - Demonstration of the agent in action
-3. **Dataset**: Captured UI states in `dataset/` directory
+- **Automatic Error Recovery**: AI-powered error handling that automatically fixes selectors and retries failed steps
+- **Smart Element Detection**: Intelligent matching of UI elements using multiple strategies (text, aria-label, context)
+- **Persistent Login**: Remembers login state across sessions
+- **Contenteditable Support**: Handles modern rich text editors (ProseMirror, etc.)
+- **Custom Dropdown Support**: Works with custom dropdown components, not just standard HTML selects
 
 ## Requirements
 

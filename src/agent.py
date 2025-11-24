@@ -57,11 +57,16 @@ class AgentB:
                 print(f"\n🌐 Opening: {task_plan['startingUrl']}")
                 await self.navigator.navigate(task_plan["startingUrl"])
                 
-                # Step 2.5: Always prompt for manual login
-                print("\n" + "=" * 60)
-                print("⏸️  PAUSED: Please log in manually in the browser")
-                print("=" * 60)
-                input("Press ENTER after you have logged in to continue...\n")
+                # Check if already logged in, otherwise prompt for manual login
+                is_logged_in = await self.navigator.is_logged_in(task_plan["startingUrl"])
+                
+                if not is_logged_in:
+                    print("\n" + "=" * 60)
+                    print("⏸️  PAUSED: Please log in manually in the browser")
+                    print("=" * 60)
+                    input("Press ENTER after you have logged in to continue...\n")
+                else:
+                    print("\n✅ Already logged in! Continuing with task execution...\n")
                 
                 # Capture logged-in state
                 login_screenshot = await self.screenshot_capture.capture(
