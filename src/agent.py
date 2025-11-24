@@ -57,16 +57,11 @@ class AgentB:
                 print(f"\n🌐 Opening: {task_plan['startingUrl']}")
                 await self.navigator.navigate(task_plan["startingUrl"])
                 
-                # Step 2.5: Check if already logged in, if not, wait for manual login
-                is_logged_in = await self.navigator.is_logged_in(task_plan["startingUrl"])
-                
-                if not is_logged_in:
-                    print("\n" + "=" * 60)
-                    print("⏸️  PAUSED: Please log in manually in the browser")
-                    print("=" * 60)
-                    input("Press ENTER after you have logged in to continue...\n")
-                else:
-                    print("\n✅ Already logged in! Continuing with task execution...\n")
+                # Step 2.5: Always prompt for manual login
+                print("\n" + "=" * 60)
+                print("⏸️  PAUSED: Please log in manually in the browser")
+                print("=" * 60)
+                input("Press ENTER after you have logged in to continue...\n")
                 
                 # Capture logged-in state
                 login_screenshot = await self.screenshot_capture.capture(
@@ -173,10 +168,12 @@ class AgentB:
         Returns:
             Structured task plan
         """
-        prompt = f"""You are Agent B in a multi-agent system. Agent A sends you natural-language task requests such as:
+        prompt = f"""
+You are Agent B in a multi-agent system. Agent A sends you natural-language task requests such as:
 - “How do I create a project in Linear?”
 - “How do I filter a database in Notion?”
 - “How do I change workspace settings in Asana?”
+- Or any similar task in any other web app.
 
 Your job:
 **Generate a complete, step-by-step execution plan for performing the task in the live web application, including capturing every UI state — even those with no unique URL (modals, drawers, forms, etc.).**
@@ -198,11 +195,11 @@ This system must NOT rely on hardcoded sequences or app-specific assumptions. It
 =====================================================================
 
 1. **Generalize Across Any App**
-   You may encounter Linear, Notion, Asana, Trello, Jira, Monday.com, or unknown apps.
+   You may encounter Linear, Notion, Asana, Trello, Jira, Monday.com, custom in-house tools, or completely unknown apps.
    Therefore:
    - Infer UI layouts and navigation structures.
    - Infer meaning from visible text, labels, roles, ARIA attributes.
-   - Never assume app-specific naming.
+   - Never assume app-specific naming or fixed locations for UI elements.
 
 2. **Generalize Across Any Task**
    Tasks may involve:
@@ -213,7 +210,7 @@ This system must NOT rely on hardcoded sequences or app-specific assumptions. It
    - Navigate between sections
    - Change workspace settings
    - Duplicate / Move / Assign
-   Infer workflow based on semantics.
+   Infer workflow based on task semantics and visible UI.
 
 3. **Capture UI States Even Without URLs**
    Many states have no unique URL:
@@ -224,54 +221,96 @@ This system must NOT rely on hardcoded sequences or app-specific assumptions. It
    - Dropdowns
    Capture states before/after interactions when meaningful.
 
-4. **Never Assume the Correct Starting Page**
-   Begin with:
-   - A navigation step, OR
-   - A discovery scan step
-   before performing actions.
+4. **CRITICAL: Discover Before Navigating**
+   **ALWAYS discover elements on the current page before navigating.**
+   - Start at the startingUrl (usually the app's main page)
+   - Use a "discover" action to see what navigation options are available
+   - Use "find" to locate navigation elements (e.g., section names relevant to the task such as "Projects", "Issues", "Dashboard", "Settings"—these are examples only, actual labels must come from discover)
+   - Click on navigation elements to navigate, NOT by using direct URLs
+   - Only use "navigate" action for the initial startingUrl, never for internal navigation
 
-5. **Use "navigate" ONLY for Full URLs**
+5. **Use "navigate" ONLY for Initial Starting URL**
+   **IMPORTANT:** Only use "navigate" for the very first URL (startingUrl).
    Example:
-   `"navigate": "https://linear.app/projects"`
-   Never use navigate for clickable elements.
+   "navigate": "https://app.example.com"  ✅ (only for startingUrl)
+   "navigate": "https://app.example.com/projects"  ❌ (WRONG - use discover + click instead)
+   
+   For all internal navigation within the app:
+   - First use "discover" to see available navigation options
+   - Then use "find" to locate the navigation element (e.g., section names relevant to the task such as "Projects", "Issues", "Tasks", "Board"—these are examples only, actual labels must come from discover)
+   - Finally use "click" to navigate to that section
 
-6. **Use "click" for UI Elements**
+6. **Use "click" for ALL Navigation and UI Elements**
    Examples:
-   - `text=Projects`
-   - `text=Add project`
-   - `role=button[name='New']`
-   - `aria-label=Create task`
+   - "target": "text=Projects" (for navigating to a Projects section)
+   - "target": "text=Add project" (for creating new items)
+   - "target": "role=button[name='New']"
+   - "target": "aria-label=Create task"
+   
+   **Remember:** Navigation within the app = discover → find → click, NOT navigate with URLs.
 
 7. **Always Use Wait Steps**
-   Wait 2–3 seconds after:
+   Wait 2–3 seconds (or equivalent explicit "wait" step) after:
    - Modal opens
    - Form submission
    - Navigation change
 
 8. **Use Realistic Input Text**
    Examples:
-   - “Sample Project”
-   - “Demo Task”
-   - “Research Database”
+   - "Sample Project"
+   - "Demo Task"
+   - "Research Database"
 
-9. **Do NOT Include Login Steps**
+9. **CRITICAL: Always Type Into Fields When Task Requires It**
+   **If the task mentions filling in a field (title, description, name, etc.), you MUST include a "type" action step.**
+   
+   Examples:
+   - Task: "Create an issue with title 'Bug Fix'"
+     ✅ REQUIRED: {{"action": "type", "target": "Title", "value": "Bug Fix"}}
+     ❌ WRONG: {{"action": "find", "target": "Title"}} (finding is not enough!)
+   
+   - Task: "Add description 'This is a test'"
+     ✅ REQUIRED: {{"action": "type", "target": "Description", "value": "This is a test"}}
+     ❌ WRONG: {{"action": "find", "target": "Description"}} (finding is not enough!)
+   
+   **Rule:** If the user provides specific text to enter (title, description, name, etc.), you MUST use the "type" action with that exact text. Finding the field is optional - typing is mandatory.
+
+10. **Do NOT Include Login Steps**
    The user is already logged in.
 
 =====================================================================
 📌 SECTION 2 — DYNAMIC EXPLORATION & FALLBACKS
 =====================================================================
 
+**MANDATORY WORKFLOW FOR NAVIGATION:**
+1. Start at startingUrl (use "navigate" only here)
+2. Use "discover" to see all available navigation options
+3. Use "find" to locate the target navigation element (e.g., section names relevant to the task such as "Projects", "Issues", "Tasks", "Settings"—these are examples only, actual labels come from discover)
+4. Use "click" to navigate to that section
+5. Continue with task-specific actions
+
+**NEVER use "navigate" with internal URLs like "/projects" or "/issues".**
+**ALWAYS discover and click navigation elements instead.**
+
 Allowed exploration actions:
 
 - **"discover"**  
+  **MANDATORY FIRST STEP** after landing on startingUrl.
   Lists visible:
   - buttons, links, menus
   - headings, sidebar items
   - modal indicators
+  - navigation elements
+  
+  Use this to understand what navigation options are available before clicking.
 
 - **"find"**  
   Semantic matching for:
-  - “Create” ~ “Add” ~ “New” ~ “+”
+  - Navigation elements: section names relevant to the task (e.g., "Projects", "Issues", "Dashboard", "Tasks", "Settings"—these are examples only, actual labels depend on the app's UI)
+  - Action buttons: "Create" ~ "Add" ~ "New" ~ "+"
+  - Filter/search elements
+  
+  Use this to locate specific elements before clicking them.
 
 - **"extractText"**  
   Reads visible text to infer:
@@ -281,13 +320,13 @@ Allowed exploration actions:
   - available actions
 
 - **"conditional"**  
-  Execute steps only if element exists.
+  Execute steps only if some element or state exists.
 
 Fallback rules:
-- If “Projects” isn’t found → try “Boards”, “Issues”, “Tasks”, “Pages”.
-- If “Create” isn’t found → try “Add”, “New”, “+”.
-- If element not clickable → try parent selector.
-- If modal doesn’t open → retry after delay.
+- If a target navigation label is not found, try semantically related alternatives based on the task (e.g., sections representing collections, lists, dashboards, or content areas). The exact labels depend on the app's UI.
+- If an action button label (e.g., "Create") isn't found → try semantically related alternatives (e.g., "Add", "New", "+", or synonyms implied by the task context).
+- If element not clickable → try clicking a parent or wrapper element.
+- If a modal doesn't open → retry after a delay and re-discover.
 
 =====================================================================
 📌 SECTION 2.5 — MANDATORY UI LABEL VALIDATION (CRITICAL)
@@ -295,21 +334,22 @@ Fallback rules:
 
 Before clicking ANY button or actionable element, Agent B MUST:
 
-1. Perform a `"discover"` step to list visible UI elements.
-2. Use `"extractText"` to gather ALL visible button/link labels.
+1. Perform a "discover" step to list visible UI elements.
+2. Use "extractText" to gather ALL visible button/link labels.
 3. Perform semantic matching between:
    - the task intent (e.g., “create project”), and
-   - visible UI labels (e.g., “Add project”, “New project”, “+ Project”, “Create”).
+   - visible UI labels (e.g., “Add project”, “New project”, “+ Project”, “Create”, “New item”).
 4. Select the MOST semantically relevant visible label.
-5. Use ONLY the real UI label in `"target"`.
+5. Use ONLY the real UI label in "target".
 6. NEVER assume a button label from the task description.
 7. Only click labels confirmed to exist on screen.
 
 Example:
 If the visible button is **“Add project”**, you MUST output:
-“target”: “text=Add project”
+"target": "text=Add project"
 NOT:
 "target": "text=Create project"
+
 This rule applies to ALL apps and ALL tasks.
 
 =====================================================================
@@ -318,17 +358,42 @@ This rule applies to ALL apps and ALL tasks.
 
 Before generating steps, Agent B MUST:
 1. Parse the natural-language request.
-2. Identify task intent (create, filter, navigate, delete, configure).
-3. Identify target object (project, task, page, database, issue).
-4. Identify the app.
-5. Build a logical workflow:
-   - Navigate to section
-   - Discover visible elements
-   - Validate UI labels
-   - Open modal
-   - Fill fields
-   - Submit
+2. Identify task intent (create, filter, navigate, delete, configure, etc.).
+3. Identify target object (project, task, page, database, issue, workspace, etc.).
+4. Identify the app (from the task text, e.g., "in Linear", "in Notion", "in Asana", or infer if possible).
+5. Determine a reasonable **startingUrl**:
+   - Use the main application URL inferred from the app name and task (e.g., "https://linear.app", "https://www.notion.so", "https://app.asana.com", or another appropriate base URL).
+   - If app is unknown, choose a reasonable HTTPS base URL based on its name (e.g., "https://{{appNameLower}}.com" or "https://app.{{appNameLower}}.com") and specify it in "startingUrl".
+6. Build a logical workflow:
+   - Navigate to startingUrl (ONLY use "navigate" here)
+   - Discover visible elements (MANDATORY first step)
+   - Find navigation element (e.g., section names relevant to the task such as "Projects", "Issues", "Tasks", "Settings"—these are examples only, actual labels must come from discover)
+   - Click navigation element to navigate (NEVER use "navigate" with internal URLs)
+   - Discover visible elements on new page
+   - Validate UI labels via "discover" + "extractText"
+   - Open modal/form if needed
+   - **CRITICAL: For EACH input field mentioned in the task, you MUST:**
+     * Find the field (optional, can skip explicit find if obvious)
+     * TYPE into the field using "type" action with the actual value from the task
+   - **CRITICAL: For dropdown/select fields:**
+     * Use "select" action with target = field name (e.g., "Priority", "Status", "Assignee")
+     * Use value = the option to select (e.g., "Medium", "High", "Low")
+     * Example: {{"action": "select", "target": "Priority", "value": "Medium"}}
+     * ❌ WRONG: {{"action": "select", "target": "text=Medium", "value": ""}}
+     * ✅ CORRECT: {{"action": "select", "target": "Priority", "value": "Medium"}}
+   - **CRITICAL: Only include steps that are EXPLICITLY mentioned in the task**
+     * If the task doesn't mention assigning, assigning to a user, or an assignee field → DO NOT include an "Assignee" step
+     * If the task doesn't mention a status, priority, or label → DO NOT include those steps
+     * Only add steps for fields/actions that are explicitly requested in the task description
+     * Example: Task says "assign it as medium priority" → include Priority step ✅
+     * Example: Task says "create an issue with title X" → DO NOT add Assignee step ❌
+   - Submit the form
    - Verify success
+   
+   **IMPORTANT:** 
+   - If the task asks you to fill in a title, description, or any text field, you MUST include a "type" action step. Finding the field is NOT enough - you must actually type the value.
+   - For dropdowns, the "target" must be the FIELD NAME (like "Priority"), not the option value (like "Medium"). The "value" is the option to select.
+   - **NEVER add optional steps that aren't mentioned in the task** (e.g., don't add "Assignee" if task doesn't mention assignment)
 
 =====================================================================
 📌 SECTION 4 — JSON OUTPUT FORMAT
@@ -340,72 +405,271 @@ Your result must be JSON like:
   "app": "linear" | "notion" | "asana" | "other",
   "taskName": "short-task-name",
   "description": "brief overview",
-  "startingUrl": "https://linear.app" or similar,
+  "startingUrl": "https://<main-app-url>",
   "steps": [
     {{
       "description": "What this step does",
       "action": "navigate" | "click" | "type" | "wait" | "select" |
                 "discover" | "find" | "extractText" | "conditional",
-      "target": "selector or description",
-      "value": "text typed (if any)",
+      "target": "selector or field name (for select: use field name like 'Priority', not option value)",
+      "value": "text typed (for type) or option to select (for select, e.g., 'Medium', 'High')",
       "captureBefore": true/false,
       "captureAfter": true/false
     }}
   ]
 }}
-
 =====================================================================
 📌 SECTION 5 — IMPORTANT URL RULES
 
-Linear
+CRITICAL: Only use URLs for startingUrl, never for internal navigation!
 
-Use:
-	•	https://linear.app
-	•	https://linear.app/projects
-	•	https://linear.app/issues
-Do NOT navigate to /login.
+Determining startingUrl:
 
-Notion
+Infer the main application URL from the app name in the task.
 
-Use only:
-	•	https://notion.so
-	•	https://www.notion.so
+Examples (not hard rules, just illustrations):
 
-Other Apps
+Linear → "https://linear.app
+"
 
-Infer full URLs, always starting with https://.
+Notion → "https://www.notion.so
+"
+
+Asana → "https://app.asana.com
+"
+
+Generic app "Foobar" → "https://foobar.com
+" or "https://app.foobar.com
+"
+
+Usage rules:
+
+Use "navigate" only once, to the startingUrl.
+
+For all internal navigation:
+
+Do NOT use "navigate" to URLs like "/projects", "/issues", "/settings", etc. ❌
+
+INSTEAD: use the pattern: discover → find navigation element → click ✅
+
+Do NOT navigate to login URLs. Assume the user is already authenticated.
 
 =====================================================================
 📌 SECTION 6 — REQUIRED VERIFICATION STEPS
 
 After submissions or UI transitions:
-	1.	Wait 2–3 seconds
-	2.	Verify modal closed
-	3.	Verify new item appears
-	4.	Capture updated state
+
+Use a "wait" step (2–3 seconds or until a condition is met).
+
+Verify modal closed if you submitted a modal form.
+
+Verify new item appears in the relevant list or view.
+
+Capture updated state with "captureAfter": true on the relevant step(s).
 
 =====================================================================
-📌 SECTION 7 — WHAT YOU MUST RETURN
+📌 SECTION 7 — EXAMPLE WORKFLOW (GENERIC PATTERN)
+
+Example workflow for: "How do I create a project in a project-management app?"
+{{
+  "app": "other",
+  "taskName": "create-project",
+  "startingUrl": "https://app.example.com",
+  "steps": [
+    {{
+      "description": "Navigate to the app main page",
+      "action": "navigate",
+      "target": "https://app.example.com",
+      "captureAfter": true
+    }},
+    {{
+      "description": "Discover available navigation options on the main page",
+      "action": "discover",
+      "captureAfter": true
+    }},
+    {{
+      "description": "Extract visible text to understand available sections (e.g., section names relevant to the task such as Projects, Tasks, Boards—these are examples only)",
+      "action": "extractText",
+      "captureAfter": true
+    }},
+    {{
+      "description": "Find the navigation element that best matches a projects-like area (e.g., section names relevant to the task such as 'Projects', 'Boards', 'Tasks', 'Workspaces'—these are examples only)",
+      "action": "find",
+      "target": "Projects",
+      "captureAfter": true
+    }},
+    {{
+      "description": "Click the chosen navigation element to move into the projects area",
+      "action": "click",
+      "target": "text=Projects",
+      "captureAfter": true
+    }},
+    {{
+      "description": "Discover elements on the projects area page",
+      "action": "discover",
+      "captureAfter": true
+    }},
+    {{
+      "description": "Extract visible text to identify the most relevant create/add button for new projects",
+      "action": "extractText",
+      "captureAfter": true
+    }},
+    {{
+      "description": "Find a button or control that semantically matches creating a new project (e.g., 'New project', 'Add project', 'Create', '+')",
+      "action": "find",
+      "target": "Create",
+      "captureAfter": true
+    }},
+    {{
+      "description": "Click the identified button to open the create-project modal or form",
+      "action": "click",
+      "target": "text=Create",
+      "captureAfter": true
+    }},
+    {{
+      "description": "Wait for the modal or creation form to be fully visible",
+      "action": "wait",
+      "target": "[role=\\"dialog\\"]",
+      "captureAfter": true
+    }},
+    {{
+      "description": "Type the project name into the name/title field",
+      "action": "type",
+      "target": "Name",
+      "value": "Sample Project",
+      "captureAfter": true
+    }},
+    {{
+      "description": "If needed, fill out any optional description or other required fields",
+      "action": "conditional",
+      "target": "Fill additional fields if required",
+      "captureBefore": true,
+      "captureAfter": true
+    }},
+    {{
+      "description": "Click the primary button that submits the project creation (e.g., 'Create project', 'Add', 'Save')",
+      "action": "click",
+      "target": "text=Create project",
+      "captureBefore": true,
+      "captureAfter": true
+    }},
+    {{
+      "description": "Wait for the operation to complete and the project to appear in the list",
+      "action": "wait",
+      "target": "list-refresh",
+      "captureAfter": true
+    }}
+  ]
+}}
+Example workflow for: "Create an issue with title 'Bug Fix' and description 'Fix the bug'" (generic issue-tracking app):
+{{
+  "app": "other",
+  "taskName": "create-issue",
+  "startingUrl": "https://issues.example.com",
+  "steps": [
+    {{
+      "description": "Navigate to the main page of the issue-tracking app",
+      "action": "navigate",
+      "target": "https://issues.example.com",
+      "captureAfter": true
+    }},
+    {{
+      "description": "Discover navigation options on the landing page",
+      "action": "discover",
+      "captureAfter": true
+    }},
+    {{
+      "description": "Extract text to identify an issues or tickets section",
+      "action": "extractText",
+      "captureAfter": true
+    }},
+    {{
+      "description": "Click the navigation element that best matches the issues area (e.g., 'Issues', 'Bugs', 'Tickets')",
+      "action": "click",
+      "target": "text=Issues",
+      "captureAfter": true
+    }},
+    {{
+      "description": "Discover elements in the issues area",
+      "action": "discover",
+      "captureAfter": true
+    }},
+    {{
+      "description": "Find the button or control to create a new issue",
+      "action": "find",
+      "target": "New issue",
+      "captureAfter": true
+    }},
+    {{
+      "description": "Click the control to open the new-issue form",
+      "action": "click",
+      "target": "text=New issue",
+      "captureAfter": true
+    }},
+    {{
+      "description": "Type the provided title into the title field",
+      "action": "type",
+      "target": "Title",
+      "value": "Bug Fix",
+      "captureAfter": true
+    }},
+    {{
+      "description": "Type the provided description into the description field",
+      "action": "type",
+      "target": "Description",
+      "value": "Fix the bug",
+      "captureAfter": true
+    }},
+    {{
+      "description": "Select Medium priority from Priority dropdown",
+      "action": "select",
+      "target": "Priority",
+      "value": "Medium",
+      "captureAfter": true
+    }},
+    {{
+      "description": "Submit the new issue using the primary submit button (e.g., 'Create issue', 'Save')",
+      "action": "click",
+      "target": "text=Create issue",
+      "captureBefore": true,
+      "captureAfter": true
+    }},
+    {{
+      "description": "Wait briefly and verify that the new issue appears in the list",
+      "action": "wait",
+      "target": "state-change-indicator",
+      "captureAfter": true
+    }}
+  ]
+}}
+
+**CRITICAL DISCLAIMER:**
+These examples illustrate the pattern only. Actual labels, field names, and selectors MUST always come from discover + extractText, not from these examples. This ensures the model never treats examples as truth. The examples show the workflow structure, but all specific UI elements must be discovered from the live page.
+
+=====================================================================
+📌 SECTION 8 — WHAT YOU MUST RETURN
 
 Your final JSON MUST:
-✔ Include navigation
-✔ Include exploration
-✔ Include UI label validation
-✔ Use the REAL UI text for buttons
-✔ Include captures
-✔ Include waits
-✔ Handle non-URL states
-✔ Work across ANY app
+✔ Use "navigate" ONLY for startingUrl
+✔ Use "discover" as first step after startingUrl
+✔ Use "find" + "click" for ALL internal navigation
+✔ For EVERY field that needs to be filled (title, description, name, etc.), include a "type" action with the actual value
+✔ Include exploration via "discover", "find", and "extractText"
+✔ Include UI label validation based on real visible text
+✔ Use the REAL UI text for buttons in "target"
+✔ Include captures (captureBefore / captureAfter) around meaningful state changes
+✔ Include waits for navigation, modal open, and submissions
+✔ Handle non-URL states (modals, drawers, inline editors, etc.)
+✔ Work across ANY app (known or unknown)
 ✔ Exclude login steps
-✔ Apply deep reasoning
-✔ Match real UI
+✔ Apply deep reasoning and semantic matching between task and UI
 
 =====================================================================
 📌 END OF SYSTEM PROMPT
 
 When ready, analyze the following task query:
 
-Task: “{task_query}”
+Task: "{task_query}"
 """
         
         try:
@@ -444,6 +708,9 @@ Task: “{task_query}”
             
             # Remove login steps since user is already logged in
             plan = self._filter_login_steps(plan)
+            
+            # Remove steps that aren't mentioned in the task (like optional assignee steps)
+            plan = self._filter_unmentioned_steps(plan, task_query)
             
             return plan
         except Exception as error:
@@ -511,7 +778,7 @@ Task: “{task_query}”
                     {"description": "Navigate to Notion", "action": "navigate", "target": "https://notion.so", "captureAfter": True},
                     {"description": "Wait for page load", "action": "wait", "target": "body", "captureAfter": False}
                 ]
-            }
+            } 
         
         raise ValueError("Could not create task plan. Please provide a valid task query.")
     
@@ -536,6 +803,15 @@ Task: “{task_query}”
             await self.navigator.wait_for(target)
         elif action == "select":
             await self.navigator.select(target, value)
+        elif action == "discover":
+            await self.navigator.discover()
+        elif action == "find":
+            await self.navigator.find(target)
+        elif action == "extractText":
+            await self.navigator.extract_text()
+        elif action == "skip":
+            print(f"  ⏭️  Skipping step: {step.get('description', 'No description')}")
+            return  # Skip this step
         else:
             print(f"⚠️  Unknown action: {action}")
     
@@ -670,12 +946,26 @@ Consider:
 - ID matching
 - The context of the task
 
+**CRITICAL RULES - THESE ARE ABSOLUTE:**
+1. The suggested selector MUST semantically match the original target. For example:
+   - If target is "Assignee" → selector MUST match fields related to assignment/user assignment ONLY
+   - If target is "Title" → selector MUST match title/name fields ONLY, NEVER description, assignee, or other fields
+   - If target is "Description" → selector MUST match description/body fields ONLY, NEVER title, assignee, or other fields
+2. If no element semantically matches the target, you MUST respond with "skip": true instead of suggesting ANY field
+3. DO NOT suggest a different field type - this will cause data corruption:
+   - ❌ NEVER suggest "Title" field when looking for "Assignee"
+   - ❌ NEVER suggest "Description" field when looking for "Title"
+   - ❌ NEVER suggest "Title" field when looking for "Description"
+   - ❌ NEVER suggest any field that doesn't exactly match the semantic meaning of the target
+4. If you cannot find a matching field, set "skip": true and explain why in "reason"
+
 Respond with JSON:
 {{
   "suggestedAction": "{action}",
-  "target": "the correct selector (e.g., text=ButtonName, [aria-label='Label'], #id, etc.)",
-  "reason": "explanation of why this selector matches the intended target",
-  "confidence": "high" | "medium" | "low"
+  "target": "the correct selector (e.g., text=ButtonName, [aria-label='Label'], #id, etc.) OR null if no match found",
+  "reason": "explanation of why this selector matches the intended target, or why no match was found",
+  "confidence": "high" | "medium" | "low",
+  "skip": true/false (set to true if the field doesn't exist and the step should be skipped)
 }}"""
             
             response = self.groq.chat.completions.create(
@@ -692,18 +982,82 @@ Respond with JSON:
             print(f"  💡 AI analysis: {suggestion.get('reason')}")
             print(f"  📊 Confidence: {suggestion.get('confidence', 'unknown')}")
             
-            # Update the failed step with the suggestion
-            if suggestion.get("target"):
+            # Check if step should be skipped
+            if suggestion.get("skip", False):
+                print(f"  ⏭️  Step should be skipped - field doesn't exist or isn't needed")
+                # Mark step to be skipped by changing action to a no-op
+                task_plan["steps"][failed_step_index]["action"] = "skip"
+                task_plan["steps"][failed_step_index]["target"] = "step-skipped"
+                return
+            
+            # Validate that suggested target semantically matches original target
+            original_target_lower = target.lower().strip()
+            suggested_target = suggestion.get("target", "").strip()
+            
+            if suggested_target:
+                suggested_lower = suggested_target.lower()
+                
+                # STRICT VALIDATION: Check for explicit mismatches first
+                # These are known wrong field mappings that should NEVER happen
+                explicit_mismatches = [
+                    ("assignee", "title"),
+                    ("assignee", "name"),
+                    ("assignee", "description"),
+                    ("title", "description"),
+                    ("title", "assignee"),
+                    ("description", "title"),
+                    ("description", "assignee"),
+                ]
+                
+                for original, wrong_field in explicit_mismatches:
+                    if original in original_target_lower and wrong_field in suggested_lower:
+                        print(f"  ❌ ERROR: Cannot use '{wrong_field}' field for '{original}' target - these are different fields!")
+                        print(f"  ⏭️  Skipping this step to prevent data corruption")
+                        task_plan["steps"][failed_step_index]["action"] = "skip"
+                        task_plan["steps"][failed_step_index]["target"] = "step-skipped"
+                        return
+                
+                # Check if suggested target semantically matches original
+                # Extract key words from original target
+                original_keywords = set(word for word in original_target_lower.split() if len(word) > 2)
+                
+                # Check for semantic matches
+                matches_semantically = False
+                
+                # Exact match or contains original keywords
+                if original_target_lower in suggested_lower or suggested_lower in original_target_lower:
+                    matches_semantically = True
+                # Check for keyword matches
+                elif any(keyword in suggested_lower for keyword in original_keywords if len(keyword) > 2):
+                    matches_semantically = True
+                # Check for common semantic relationships (only positive matches)
+                elif (original_target_lower == "assignee" and ("assign" in suggested_lower or "user" in suggested_lower or "owner" in suggested_lower)):
+                    matches_semantically = True
+                elif (original_target_lower == "title" and ("title" in suggested_lower or ("name" in suggested_lower and "issue" in suggested_lower))):
+                    matches_semantically = True
+                elif (original_target_lower == "description" and ("description" in suggested_lower or "body" in suggested_lower or "content" in suggested_lower)):
+                    matches_semantically = True
+                
+                if not matches_semantically:
+                    print(f"  ⚠️  Warning: Suggested selector '{suggested_target}' doesn't semantically match original target '{target}'")
+                    print(f"  ⏭️  Skipping this step instead of using wrong field")
+                    task_plan["steps"][failed_step_index]["action"] = "skip"
+                    task_plan["steps"][failed_step_index]["target"] = "step-skipped"
+                    return
+                
+                # Update the failed step with the suggestion
                 old_target = task_plan["steps"][failed_step_index]["target"]
-                task_plan["steps"][failed_step_index]["target"] = suggestion["target"]
-                print(f"  🔄 Updated selector: '{old_target}' -> '{suggestion['target']}'")
+                task_plan["steps"][failed_step_index]["target"] = suggested_target
+                print(f"  🔄 Updated selector: '{old_target}' -> '{suggested_target}'")
                 
                 # If action needs to change, update it
                 if suggestion.get("suggestedAction") and suggestion["suggestedAction"] != action:
                     task_plan["steps"][failed_step_index]["action"] = suggestion["suggestedAction"]
                     print(f"  🔄 Updated action: '{action}' -> '{suggestion['suggestedAction']}'")
             else:
-                print("  ⚠️  AI did not provide a valid target selector")
+                print("  ⚠️  AI did not provide a valid target selector - skipping step")
+                task_plan["steps"][failed_step_index]["action"] = "skip"
+                task_plan["steps"][failed_step_index]["target"] = "step-skipped"
                 
         except Exception as e:
             print(f"  ⚠️  Could not adapt plan: {e}")
@@ -816,5 +1170,93 @@ Respond with JSON:
                 plan["startingUrl"] = plan["startingUrl"].replace("/login", "").replace("/signin", "")
             print(f"  🔄 Changed startingUrl from login page to: {plan['startingUrl']}")
         
+        return plan
+    
+    def _filter_unmentioned_steps(self, plan: dict, task_query: str) -> dict:
+        """Remove steps that aren't explicitly mentioned in the task query"""
+        if not plan.get("steps"):
+            return plan
+        
+        task_lower = task_query.lower()
+        filtered_steps = []
+        
+        # Keywords that indicate optional steps that shouldn't be included unless mentioned
+        # Note: "assign" can mean "assign priority" (priority) or "assign to user" (assignee)
+        # We need to distinguish between these contexts
+        optional_step_keywords = {
+            "assignee": ["assignee", "assign to", "assigned to", "user assignment", "assigning to", "assign to user", "assign to a user"],
+            "status": ["status", "set status", "change status"],
+            "label": ["label", "labels", "add label", "tag"],
+            "due date": ["due date", "due", "deadline"],
+            "milestone": ["milestone"],
+        }
+        
+        # Check if task mentions user assignment (not priority assignment)
+        # "assign it as priority" or "assign priority" = priority, NOT assignee
+        # "assign to user" or "assign to" = assignee
+        task_mentions_user_assignment = any(
+            phrase in task_lower for phrase in [
+                "assign to", "assign to a", "assign to user", "assign to me", 
+                "assignee", "assigned to", "user assignment"
+            ]
+        ) and not any(
+            phrase in task_lower for phrase in [
+                "assign it as", "assign as", "assign priority", "assign status"
+            ]
+        )
+        
+        for step in plan["steps"]:
+            description = step.get("description", "").lower()
+            target = step.get("target", "").lower()
+            action = step.get("action", "").lower()
+            value = step.get("value", "").lower()
+            
+            # Check if this step is about an optional field
+            should_include = True
+            
+            # Special handling for assignee - check if it's about user assignment, not priority
+            if "assignee" in description or "assignee" in target or "assignee" in value:
+                # Check if step is about assigning to a user (not priority)
+                is_user_assignment_step = (
+                    "assignee" in description or
+                    "assignee" in target or
+                    "assignee" in value or
+                    ("assign" in description and "user" in description) or
+                    ("assign" in target and "user" in target) or
+                    ("assign" in value and "user" in value)
+                )
+                
+                if is_user_assignment_step and not task_mentions_user_assignment:
+                    print(f"  🔄 Removed unmentioned step: {step.get('description')} (task doesn't mention user assignment)")
+                    should_include = False
+                    continue
+            
+            # Check other optional fields
+            for field_name, keywords in optional_step_keywords.items():
+                if field_name == "assignee":
+                    continue  # Already handled above
+                
+                # Check if step is about this optional field (check description, target, and value)
+                is_about_field = (
+                    field_name in description or
+                    field_name in target or
+                    field_name in value or
+                    any(keyword in description for keyword in keywords) or
+                    any(keyword in target for keyword in keywords) or
+                    any(keyword in value for keyword in keywords)
+                )
+                
+                # Check if task mentions this field
+                task_mentions_field = any(keyword in task_lower for keyword in keywords)
+                
+                if is_about_field and not task_mentions_field:
+                    print(f"  🔄 Removed unmentioned step: {step.get('description')} (task doesn't mention {field_name})")
+                    should_include = False
+                    break
+            
+            if should_include:
+                filtered_steps.append(step)
+        
+        plan["steps"] = filtered_steps
         return plan
 

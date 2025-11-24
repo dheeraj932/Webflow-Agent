@@ -23,85 +23,257 @@ class Navigator:
     
     async def initialize(self):
         """Initialize browser with Chrome - configured to avoid detection"""
-        print("🌐 Launching Chrome browser...")
+        print("🌐 Launching Chrome browser with enhanced stealth settings...")
         
         self.playwright = await async_playwright().start()
         
-        # Use Chrome instead of Chromium with stealth settings
-        self.browser = await self.playwright.chromium.launch(
+        # Use persistent user data directory for more realistic browser profile
+        storage_path = os.getenv("BROWSER_STORAGE_PATH", "browser_storage")
+        os.makedirs(storage_path, exist_ok=True)
+        user_data_dir = os.path.join(storage_path, "user_data")
+        os.makedirs(user_data_dir, exist_ok=True)
+        
+        # Clean up Chrome singleton lock file if it exists (prevents "File exists" errors)
+        singleton_lock = os.path.join(user_data_dir, "SingletonLock")
+        singleton_socket = os.path.join(user_data_dir, "SingletonSocket")
+        if os.path.exists(singleton_lock):
+            try:
+                os.remove(singleton_lock)
+                print("  🔓 Cleaned up Chrome singleton lock file")
+            except Exception as e:
+                print(f"  ⚠️  Could not remove singleton lock: {e}")
+        if os.path.exists(singleton_socket):
+            try:
+                os.remove(singleton_socket)
+            except Exception:
+                pass
+        
+        # Use Chrome instead of Chromium with enhanced stealth settings
+        # launch_persistent_context returns a BrowserContext directly
+        self.context = await self.playwright.chromium.launch_persistent_context(
+            user_data_dir=user_data_dir,
             channel="chrome",  # Use Chrome instead of Chromium
             headless=os.getenv("HEADLESS", "false").lower() != "false",
             slow_mo=int(os.getenv("SLOW_MO", "100")),
+            viewport={"width": 1920, "height": 1080},
+            user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+            locale="en-US",
+            timezone_id="America/Los_Angeles",
+            permissions=["geolocation"],
             args=[
                 "--disable-blink-features=AutomationControlled",
                 "--disable-dev-shm-usage",
                 "--no-sandbox",
                 "--disable-setuid-sandbox",
                 "--disable-web-security",
-                "--disable-features=IsolateOrigins,site-per-process"
-            ]
-        )
-        
-        # Create context with realistic browser fingerprint
-        # Use persistent storage to maintain login state
-        storage_path = os.getenv("BROWSER_STORAGE_PATH", "browser_storage")
-        os.makedirs(storage_path, exist_ok=True)
-        state_file = os.path.join(storage_path, "state.json")
-        
-        self.context = await self.browser.new_context(
-            viewport={"width": 1920, "height": 1080},
-            user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            locale="en-US",
-            timezone_id="America/Los_Angeles",
-            permissions=["geolocation"],
-            storage_state=state_file if os.path.exists(state_file) else None,
+                "--disable-features=IsolateOrigins,site-per-process",
+                "--disable-infobars",
+                "--disable-notifications",
+                "--disable-popup-blocking",
+                "--disable-translate",
+                "--disable-background-timer-throttling",
+                "--disable-backgrounding-occluded-windows",
+                "--disable-renderer-backgrounding",
+                "--disable-features=TranslateUI",
+                "--disable-ipc-flooding-protection",
+                "--enable-features=NetworkService,NetworkServiceInProcess",
+                "--force-color-profile=srgb",
+                "--metrics-recording-only",
+                "--use-mock-keychain",
+                "--no-first-run",
+                "--no-default-browser-check",
+                "--password-store=basic",
+                "--use-gl=swiftshader",
+                "--hide-scrollbars",
+                "--mute-audio",
+                "--disable-background-networking",
+                "--disable-default-apps",
+                "--disable-extensions",
+                "--disable-sync",
+                "--disable-plugins-discovery",
+                "--start-maximized"
+            ],
             extra_http_headers={
                 "Accept-Language": "en-US,en;q=0.9",
-                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
-                "Accept-Encoding": "gzip, deflate, br",
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+                "Accept-Encoding": "gzip, deflate, br, zstd",
                 "Connection": "keep-alive",
                 "Upgrade-Insecure-Requests": "1",
                 "Sec-Fetch-Dest": "document",
                 "Sec-Fetch-Mode": "navigate",
                 "Sec-Fetch-Site": "none",
-                "Cache-Control": "max-age=0"
+                "Sec-Fetch-User": "?1",
+                "Cache-Control": "max-age=0",
+                "sec-ch-ua": '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"',
+                "sec-ch-ua-mobile": "?0",
+                "sec-ch-ua-platform": '"macOS"'
             }
         )
         
-        self.page = await self.context.new_page()
+        # With persistent context, browser is managed internally
+        # Set browser to None since we'll close via context
+        self.browser = None
         
-        # Inject JavaScript to hide automation indicators
+        # Get or create the first page
+        pages = self.context.pages
+        if pages:
+            self.page = pages[0]
+        else:
+            self.page = await self.context.new_page()
+        
+        # Enhanced JavaScript injection to hide automation indicators
         await self.page.add_init_script("""
-            // Override the navigator.webdriver property
+            // Remove webdriver property
             Object.defineProperty(navigator, 'webdriver', {
                 get: () => undefined
             });
             
-            // Override the plugins property
+            // Override the plugins property to mimic a real browser
             Object.defineProperty(navigator, 'plugins', {
-                get: () => [1, 2, 3, 4, 5]
+                get: () => {
+                    const plugins = [
+                        {
+                            0: {type: "application/x-google-chrome-pdf", suffixes: "pdf", description: "Portable Document Format"},
+                            description: "Portable Document Format",
+                            filename: "internal-pdf-viewer",
+                            length: 1,
+                            name: "Chrome PDF Plugin"
+                        },
+                        {
+                            0: {type: "application/pdf", suffixes: "pdf", description: ""},
+                            description: "",
+                            filename: "mhjfbmdgcfjbbpaeojofohoefgiehjai",
+                            length: 1,
+                            name: "Chrome PDF Viewer"
+                        },
+                        {
+                            0: {type: "application/x-nacl", suffixes: "", description: "Native Client Executable"},
+                            1: {type: "application/x-pnacl", suffixes: "", description: "Portable Native Client Executable"},
+                            description: "",
+                            filename: "internal-nacl-plugin",
+                            length: 2,
+                            name: "Native Client"
+                        }
+                    ];
+                    plugins.item = function(index) { return this[index] || null; };
+                    plugins.namedItem = function(name) {
+                        for (let i = 0; i < this.length; i++) {
+                            if (this[i].name === name) return this[i];
+                        }
+                        return null;
+                    };
+                    return plugins;
+                }
             });
             
-            // Override the languages property
+            // Override languages
             Object.defineProperty(navigator, 'languages', {
                 get: () => ['en-US', 'en']
             });
             
-            // Override the chrome property
+            // Override chrome property
             window.chrome = {
-                runtime: {}
+                runtime: {},
+                loadTimes: function() {},
+                csi: function() {},
+                app: {}
             };
             
-            // Override permissions
+            // Override permissions API
             const originalQuery = window.navigator.permissions.query;
             window.navigator.permissions.query = (parameters) => (
                 parameters.name === 'notifications' ?
                     Promise.resolve({ state: Notification.permission }) :
                     originalQuery(parameters)
             );
+            
+            // Override Notification permission
+            Object.defineProperty(Notification, 'permission', {
+                get: () => 'default'
+            });
+            
+            // Mock getBattery API
+            if (navigator.getBattery) {
+                navigator.getBattery = () => Promise.resolve({
+                    charging: true,
+                    chargingTime: 0,
+                    dischargingTime: Infinity,
+                    level: 1
+                });
+            }
+            
+            // Override toString methods to hide automation
+            const getParameter = WebGLRenderingContext.prototype.getParameter;
+            WebGLRenderingContext.prototype.getParameter = function(parameter) {
+                if (parameter === 37445) {
+                    return 'Intel Inc.';
+                }
+                if (parameter === 37446) {
+                    return 'Intel Iris OpenGL Engine';
+                }
+                return getParameter.call(this, parameter);
+            };
+            
+            // Override navigator.platform
+            Object.defineProperty(navigator, 'platform', {
+                get: () => 'MacIntel'
+            });
+            
+            // Override navigator.hardwareConcurrency
+            Object.defineProperty(navigator, 'hardwareConcurrency', {
+                get: () => 8
+            });
+            
+            // Override navigator.deviceMemory
+            Object.defineProperty(navigator, 'deviceMemory', {
+                get: () => 8
+            });
+            
+            // Override connection
+            Object.defineProperty(navigator, 'connection', {
+                get: () => ({
+                    effectiveType: '4g',
+                    rtt: 50,
+                    downlink: 10,
+                    saveData: false
+                })
+            });
+            
+            // Remove automation indicators from window
+            delete window.cdc_adoQpoasnfa76pfcZLmcfl_Array;
+            delete window.cdc_adoQpoasnfa76pfcZLmcfl_Promise;
+            delete window.cdc_adoQpoasnfa76pfcZLmcfl_Symbol;
+            
+            // Override toString to hide automation
+            const originalToString = Function.prototype.toString;
+            Function.prototype.toString = function() {
+                if (this === navigator.getBattery || 
+                    this === navigator.permissions.query ||
+                    this === WebGLRenderingContext.prototype.getParameter) {
+                    return 'function () { [native code] }';
+                }
+                return originalToString.call(this);
+            };
+            
+            // Override document.documentElement.webdriver
+            Object.defineProperty(document.documentElement, 'webdriver', {
+                get: () => undefined
+            });
+            
+            // Mock missing properties
+            if (!window.outerHeight) {
+                Object.defineProperty(window, 'outerHeight', {
+                    get: () => window.innerHeight
+                });
+            }
+            if (!window.outerWidth) {
+                Object.defineProperty(window, 'outerWidth', {
+                    get: () => window.innerWidth
+                });
+            }
         """)
         
-        print("✅ Browser initialized with stealth settings")
+        print("✅ Browser initialized with enhanced stealth settings")
     
     async def navigate(self, url: str):
         """Navigate to a URL"""
@@ -382,6 +554,58 @@ class Navigator:
                     # Re-sort after all adjustments
                     scored_buttons.sort(key=lambda x: x["score"], reverse=True)
                     
+                    # Handle ties: when multiple buttons have the same score,
+                    # prefer the one with better semantic match to the target
+                    if len(scored_buttons) > 1:
+                        top_score = scored_buttons[0]["score"]
+                        tied_buttons = [btn for btn in scored_buttons if btn["score"] == top_score]
+                        
+                        if len(tied_buttons) > 1:
+                            # Calculate semantic similarity for tied buttons
+                            clean_selector_lower = clean_selector.lower()
+                            
+                            for btn in tied_buttons:
+                                btn_text = (btn["text"] or "").lower()
+                                btn_aria = (btn.get("aria_label") or "").lower()
+                                            
+                                # Calculate semantic similarity score
+                                semantic_score = 0
+                                
+                                # Check how many words from target appear in button text
+                                target_words = set(clean_selector_lower.split())
+                                btn_words = set((btn_text + " " + btn_aria).split())
+                                common_words = target_words.intersection(btn_words)
+                                
+                                if common_words:
+                                    # More common words = better match
+                                    semantic_score = len(common_words) * 10
+                                    
+                                    # Bonus if button text contains key action words from target
+                                    action_words = ["add", "create", "new", "task", "issue", "project"]
+                                    if any(word in btn_text or word in btn_aria for word in action_words 
+                                           if word in clean_selector_lower):
+                                        semantic_score += 50
+                                
+                                # Penalize navigation/accessibility buttons
+                                nav_keywords = ["skip", "main content", "accessibility", "navigation"]
+                                if any(keyword in btn_text or keyword in btn_aria for keyword in nav_keywords):
+                                    semantic_score -= 100
+                                
+                                btn["semantic_tiebreaker"] = semantic_score
+                            
+                            # Re-sort tied buttons by semantic score, then by original order
+                            tied_buttons.sort(key=lambda x: (x.get("semantic_tiebreaker", 0), scored_buttons.index(x)), reverse=True)
+                            
+                            # Replace tied buttons in scored_buttons with re-sorted version
+                            other_buttons = [btn for btn in scored_buttons if btn["score"] != top_score]
+                            scored_buttons = tied_buttons + other_buttons
+                            
+                            print(f"  🔍 Tie-breaker applied: {len(tied_buttons)} buttons with score {top_score}")
+                            for i, btn in enumerate(tied_buttons[:3]):
+                                semantic = btn.get("semantic_tiebreaker", 0)
+                                text = btn['text'] or btn.get('aria_label', '') or 'No text'
+                                print(f"     {i+1}. '{text}' (semantic tie-breaker: {semantic})")
+                    
                     # Show final comparison
                     print(f"  📊 Final button comparison:")
                     for i, btn_info in enumerate(scored_buttons[:3]):
@@ -476,63 +700,135 @@ class Navigator:
         clean_selector = selector.replace("name=", "").replace("id=", "").replace("textarea=", "").strip("'\"")
         
         # Strategy 0: Try contenteditable elements (common in modern rich text editors)
+        # Use intelligent matching to find the BEST matching field
         try:
-            # Find contenteditable elements by aria-label
-            # Use general patterns: look for aria-label containing the selector or common field names
-            common_field_names = ["name", "title", "description", "text", "input"]
-            contenteditable_selectors = [
-                f'[contenteditable="true"][aria-label*="{clean_selector}"]',
-                f'[role="textbox"][aria-label*="{clean_selector}"]',
-            ]
-            # Add selectors for common field names if selector is generic
-            if not clean_selector or len(clean_selector.split()) <= 1:
-                for field_name in common_field_names:
-                    contenteditable_selectors.extend([
-                        f'[contenteditable="true"][aria-label*="{field_name}"]',
-                        f'[role="textbox"][aria-label*="{field_name}"]',
-                    ])
-            
-            for ce_selector in contenteditable_selectors:
-                try:
-                    element = await self.page.query_selector(ce_selector)
-                    if element:
-                        # Click to focus
-                        await element.click()
-                        await asyncio.sleep(0.2)
-                        # Type into contenteditable
-                        await element.type(text, delay=50)
-                        print(f"  ✅ Typed into contenteditable element")
-                        await asyncio.sleep(0.3)
-                        return
-                except Exception:
-                    continue
-            
-            # Try finding contenteditable in modal
+            # Find all contenteditable elements in modal first
             modal_selectors = ['[role="dialog"]', '.modal', '[class*="Modal"]', '[class*="Dialog"]']
+            modal = None
             for modal_selector in modal_selectors:
                 try:
                     modal = await self.page.query_selector(modal_selector)
                     if modal:
-                        # Find contenteditable in modal
-                        ce_elements = await modal.query_selector_all('[contenteditable="true"], [role="textbox"]')
-                        for ce in ce_elements[:3]:  # Try first 3
-                            try:
-                                aria_label = await ce.get_attribute("aria-label") or ""
-                                # Match if aria-label contains the selector, or if it's a common input field pattern
-                                matches_selector = clean_selector.lower() in aria_label.lower() if clean_selector else False
-                                is_common_field = any(word in aria_label.lower() for word in ["name", "title", "description", "text", "input"])
-                                if matches_selector or is_common_field or not clean_selector:
-                                    await ce.click()
-                                    await asyncio.sleep(0.2)
-                                    await ce.type(text, delay=50)
-                                    print(f"  ✅ Typed into contenteditable in modal (aria-label: {aria_label})")
-                                    await asyncio.sleep(0.3)
-                                    return
-                            except Exception:
-                                continue
+                        break
                 except Exception:
                     continue
-        except Exception:
+            
+            # Get all contenteditable elements (in modal if found, otherwise entire page)
+            if modal:
+                ce_elements = await modal.query_selector_all('[contenteditable="true"], [role="textbox"]')
+            else:
+                ce_elements = await self.page.query_selector_all('[contenteditable="true"], [role="textbox"]')
+            
+            if ce_elements:
+                # Score each contenteditable element to find the best match
+                scored_elements = []
+                clean_selector_lower = clean_selector.lower()
+                
+                for ce in ce_elements:
+                    try:
+                        if not await ce.is_visible():
+                            continue
+                        
+                        aria_label = (await ce.get_attribute("aria-label") or "").strip()
+                        aria_label_lower = aria_label.lower()
+                        ce_id = (await ce.get_attribute("id") or "").lower()
+                        placeholder = (await ce.get_attribute("placeholder") or "").lower()
+                        
+                        # Get current text content to check if field is already filled
+                        current_text = (await ce.text_content() or "").strip()
+                        
+                        score = 0
+                        matched = False
+                        
+                        # Exact match gets highest score
+                        if clean_selector_lower == aria_label_lower:
+                            score += 1000
+                            matched = True
+                        # Word boundary match (e.g., "Title" matches "Issue title" or "Title field")
+                        elif clean_selector_lower in aria_label_lower:
+                            # Check if it's a whole word match (better than partial)
+                            word_pattern = r'\b' + re.escape(clean_selector_lower) + r'\b'
+                            if re.search(word_pattern, aria_label_lower):
+                                score += 800
+                            else:
+                                score += 500
+                            matched = True
+                        # Check if selector starts with aria-label (e.g., "Issue title" matches "title")
+                        elif aria_label_lower and clean_selector_lower.startswith(aria_label_lower):
+                            score += 400
+                            matched = True
+                        # Check if aria-label starts with selector (e.g., "title" matches "Title field")
+                        elif aria_label_lower.startswith(clean_selector_lower):
+                            score += 600
+                            matched = True
+                        # ID match
+                        elif clean_selector_lower in ce_id:
+                            score += 300
+                            matched = True
+                        # Placeholder match
+                        elif clean_selector_lower in placeholder:
+                            score += 200
+                            matched = True
+                        
+                        if not matched:
+                            continue
+                        
+                        # Prefer empty fields (fields that haven't been filled yet)
+                        if not current_text or len(current_text) == 0:
+                            score += 200
+                        else:
+                            # Penalize fields that already have content (unless it's the exact same text)
+                            if current_text.lower() != text.lower():
+                                score -= 500
+                        
+                        # Prefer fields in modal context
+                        if modal:
+                            score += 100
+                        
+                        scored_elements.append({
+                            "element": ce,
+                            "score": score,
+                            "aria_label": aria_label,
+                            "current_text": current_text
+                        })
+                    except Exception:
+                        continue
+                
+                # Sort by score and use the best match
+                if scored_elements:
+                    scored_elements.sort(key=lambda x: x["score"], reverse=True)
+                    best_match = scored_elements[0]
+                    
+                    # Show what we found
+                    if len(scored_elements) > 1:
+                        print(f"  🔍 Found {len(scored_elements)} matching contenteditable fields:")
+                        for i, elem in enumerate(scored_elements[:3]):
+                            marker = "👉 SELECTED" if i == 0 else ""
+                            aria = elem["aria_label"] or "No aria-label"
+                            current = elem["current_text"][:30] if elem["current_text"] else "empty"
+                            print(f"     {i+1}. aria-label: '{aria}', current: '{current}' (score: {elem['score']}) {marker}")
+                    
+                    # Type into the best matching field
+                    element = best_match["element"]
+                    aria_label = best_match["aria_label"]
+                    
+                    # Clear existing content if it's different from what we want to type
+                    current_text = best_match["current_text"]
+                    if current_text and current_text.lower() != text.lower():
+                        await element.click()
+                        await asyncio.sleep(0.1)
+                        # Select all and delete
+                        await element.evaluate("el => { el.textContent = ''; }")
+                        await asyncio.sleep(0.1)
+                    
+                    await element.click()
+                    await asyncio.sleep(0.2)
+                    await element.type(text, delay=50)
+                    print(f"  ✅ Typed into contenteditable field (aria-label: '{aria_label}')")
+                    await asyncio.sleep(0.3)
+                    return
+        except Exception as e:
+            print(f"  ⚠️  Error in contenteditable strategy: {e}")
             pass
         
         # Strategy 1: Try direct selector
@@ -584,71 +880,7 @@ class Navigator:
             except Exception:
                 pass
         
-        # Strategy 5: Try contenteditable elements (common in modern rich text editors)
-        try:
-            # Find contenteditable elements by aria-label
-            # Use general patterns: look for aria-label containing the selector or common field names
-            common_field_names = ["name", "title", "description", "text", "input"]
-            contenteditable_selectors = [
-                f'[contenteditable="true"][aria-label*="{clean_selector}"]',
-                f'[role="textbox"][aria-label*="{clean_selector}"]',
-            ]
-            # Add selectors for common field names if selector is generic
-            if not clean_selector or len(clean_selector.split()) <= 1:
-                for field_name in common_field_names:
-                    contenteditable_selectors.extend([
-                        f'[contenteditable="true"][aria-label*="{field_name}"]',
-                        f'[role="textbox"][aria-label*="{field_name}"]',
-                    ])
-            
-            for ce_selector in contenteditable_selectors:
-                try:
-                    element = await self.page.query_selector(ce_selector)
-                    if element and await element.is_visible():
-                        # Click to focus
-                        await element.click()
-                        await asyncio.sleep(0.2)
-                        # Clear any existing content first
-                        await element.evaluate("el => el.textContent = ''")
-                        # Type into contenteditable
-                        await element.type(text, delay=50)
-                        print(f"  ✅ Typed into contenteditable element")
-                        await asyncio.sleep(0.3)
-                        return
-                except Exception:
-                    continue
-            
-            # Try finding contenteditable in modal
-            modal_selectors = ['[role="dialog"]', '.modal', '[class*="Modal"]', '[class*="Dialog"]']
-            for modal_selector in modal_selectors:
-                try:
-                    modal = await self.page.query_selector(modal_selector)
-                    if modal:
-                        # Find contenteditable in modal
-                        ce_elements = await modal.query_selector_all('[contenteditable="true"], [role="textbox"]')
-                        for ce in ce_elements[:5]:  # Try first 5
-                            try:
-                                if await ce.is_visible():
-                                    aria_label = (await ce.get_attribute("aria-label") or "").lower()
-                                    # Match if aria-label contains the selector, or if it's a common input field pattern
-                                    matches_selector = clean_selector.lower() in aria_label.lower() if clean_selector else False
-                                    is_common_field = any(word in aria_label.lower() for word in ["name", "title", "description", "text", "input", "value", "field"])
-                                    if matches_selector or is_common_field or not clean_selector:
-                                        await ce.click()
-                                        await asyncio.sleep(0.2)
-                                        # Clear existing content
-                                        await ce.evaluate("el => el.textContent = ''")
-                                        await ce.type(text, delay=50)
-                                        print(f"  ✅ Typed into contenteditable in modal (aria-label: {aria_label})")
-                                        await asyncio.sleep(0.3)
-                                        return
-                            except Exception:
-                                continue
-                except Exception:
-                    continue
-        except Exception as e:
-            print(f"  ⚠️  Error with contenteditable strategy: {e}")
-            pass
+        # Strategy 5: Removed - contenteditable elements are now handled in Strategy 0 with intelligent matching
         
         # Strategy 6: Find all inputs and try to match by context
         try:
@@ -721,23 +953,77 @@ class Navigator:
                     continue
             
             # Try contenteditable elements first (they're often used in modern UIs)
-            for ce in modal_contenteditables[:5]:
-                try:
-                    is_visible = await ce.is_visible()
-                    if is_visible:
-                        aria_label = (await ce.get_attribute("aria-label") or "").lower()
-                        # Check if this is likely the name field
-                        matches_selector = clean_selector.lower() in aria_label.lower() if clean_selector else False
-                        is_common_field = any(word in aria_label.lower() for word in ["name", "title", "description", "text", "input", "value", "field"])
-                        if matches_selector or is_common_field or not clean_selector:
-                            await ce.click()
-                            await asyncio.sleep(0.2)
-                            await ce.type(text, delay=50)
-                            print(f"  ✅ Found and typed into contenteditable element (aria-label: {aria_label})")
-                            await asyncio.sleep(0.3)
-                            return
-                except Exception:
-                    continue
+            # Use intelligent matching like Strategy 0
+            if modal_contenteditables:
+                scored_ce = []
+                clean_selector_lower = clean_selector.lower()
+                
+                for ce in modal_contenteditables:
+                    try:
+                        if not await ce.is_visible():
+                            continue
+                        
+                        aria_label = (await ce.get_attribute("aria-label") or "").strip()
+                        aria_label_lower = aria_label.lower()
+                        current_text = (await ce.text_content() or "").strip()
+                        
+                        score = 0
+                        matched = False
+                        
+                        # Exact match
+                        if clean_selector_lower == aria_label_lower:
+                            score += 1000
+                            matched = True
+                        # Word boundary match
+                        elif clean_selector_lower in aria_label_lower:
+                            word_pattern = r'\b' + re.escape(clean_selector_lower) + r'\b'
+                            if re.search(word_pattern, aria_label_lower):
+                                score += 800
+                            else:
+                                score += 500
+                            matched = True
+                        # Starts with or contains
+                        elif aria_label_lower.startswith(clean_selector_lower):
+                            score += 600
+                            matched = True
+                        elif clean_selector_lower.startswith(aria_label_lower):
+                            score += 400
+                            matched = True
+                        
+                        if not matched:
+                            continue
+                        
+                        # Prefer empty fields
+                        if not current_text:
+                            score += 200
+                        elif current_text.lower() != text.lower():
+                            score -= 500
+                        
+                        scored_ce.append({
+                            "element": ce,
+                            "score": score,
+                            "aria_label": aria_label
+                        })
+                    except Exception:
+                        continue
+                
+                if scored_ce:
+                    scored_ce.sort(key=lambda x: x["score"], reverse=True)
+                    best_ce = scored_ce[0]
+                    element = best_ce["element"]
+                    aria_label = best_ce["aria_label"]
+                    
+                    # Clear if needed
+                    current_text = (await element.text_content() or "").strip()
+                    if current_text and current_text.lower() != text.lower():
+                        await element.evaluate("el => { el.textContent = ''; }")
+                    
+                    await element.click()
+                    await asyncio.sleep(0.2)
+                    await element.type(text, delay=50)
+                    print(f"  ✅ Found and typed into contenteditable element (aria-label: '{aria_label}')")
+                    await asyncio.sleep(0.3)
+                    return
             
             # If no modal inputs, search entire page
             if not modal_inputs:
@@ -922,8 +1208,11 @@ class Navigator:
                         options: []
                     };
                     
-                    // Extract buttons
-                    document.querySelectorAll('button, [role="button"], [onclick], a[href]').forEach(el => {
+                    // Extract buttons (excluding links)
+                    document.querySelectorAll('button, [role="button"], [onclick]').forEach(el => {
+                        // Skip if it's actually a link
+                        if (el.tagName === 'A' || el.closest('a')) return;
+                        
                         const text = el.textContent?.trim().substring(0, 100) || '';
                         const ariaLabel = el.getAttribute('aria-label') || '';
                         const id = el.getAttribute('id') || '';
@@ -945,6 +1234,34 @@ class Navigator:
                                     ariaLabel: ariaLabel ? `[aria-label="${ariaLabel}"]` : null,
                                     id: id ? `#${id}` : null,
                                     dataTestId: dataTestId ? `[data-testid="${dataTestId}"]` : null
+                                }
+                            });
+                        }
+                    });
+                    
+                    // Extract links separately
+                    document.querySelectorAll('a[href]').forEach(el => {
+                        const text = el.textContent?.trim().substring(0, 100) || '';
+                        const ariaLabel = el.getAttribute('aria-label') || '';
+                        const href = el.getAttribute('href') || '';
+                        const id = el.getAttribute('id') || '';
+                        const className = el.className || '';
+                        const isVisible = el.offsetParent !== null;
+                        
+                        if (text || ariaLabel || href) {
+                            elements.links.push({
+                                text: text,
+                                ariaLabel: ariaLabel,
+                                href: href,
+                                id: id,
+                                className: className,
+                                tag: el.tagName,
+                                visible: isVisible,
+                                selectors: {
+                                    text: text ? `text=${text.substring(0, 50)}` : null,
+                                    ariaLabel: ariaLabel ? `[aria-label="${ariaLabel}"]` : null,
+                                    href: href ? `a[href="${href}"]` : null,
+                                    id: id ? `#${id}` : null
                                 }
                             });
                         }
@@ -1044,6 +1361,34 @@ class Navigator:
                                 id: id ? `#${id}` : null
                             }
                         });
+                    });
+                    
+                    // Extract links (navigation elements)
+                    document.querySelectorAll('a[href]').forEach(el => {
+                        const text = el.textContent?.trim().substring(0, 100) || '';
+                        const ariaLabel = el.getAttribute('aria-label') || '';
+                        const href = el.getAttribute('href') || '';
+                        const id = el.getAttribute('id') || '';
+                        const className = el.className || '';
+                        const isVisible = el.offsetParent !== null;
+                        
+                        if (text || ariaLabel || href) {
+                            elements.links.push({
+                                text: text,
+                                ariaLabel: ariaLabel,
+                                href: href,
+                                id: id,
+                                className: className,
+                                tag: el.tagName,
+                                visible: isVisible,
+                                selectors: {
+                                    text: text ? `text=${text.substring(0, 50)}` : null,
+                                    ariaLabel: ariaLabel ? `[aria-label="${ariaLabel}"]` : null,
+                                    href: href ? `a[href="${href}"]` : null,
+                                    id: id ? `#${id}` : null
+                                }
+                            });
+                        }
                     });
                     
                     return elements;
@@ -1283,9 +1628,22 @@ All interactive elements: {json.dumps(all_elements, indent=2)}
         """Select an option from a dropdown (handles both standard select and custom dropdowns)"""
         print(f"  → Selecting \"{value}\" from: {selector}")
         
+        # Clean up selector - handle cases where selector might be "text=Medium" (wrong format)
+        # If selector starts with "text=", it's likely the value, not the field name
+        clean_selector = selector
+        if selector.startswith("text="):
+            # This is wrong - the selector should be the field name, not the value
+            # Try to infer the field name from context or use common patterns
+            print(f"  ⚠️  Warning: selector '{selector}' looks like a value, not a field name")
+            # Try to find dropdowns in modal that might be the target
+            # We'll search for common dropdown field names
+            clean_selector = "Priority"  # Common field name, but we'll search more broadly
+        else:
+            clean_selector = selector.replace("name=", "").replace("id=", "").strip("'\"")
+        
         # First, try standard HTML select element
         try:
-            await self.page.select_option(selector, value, timeout=3000)
+            await self.page.select_option(clean_selector, value, timeout=3000)
             await asyncio.sleep(0.5)
             return
         except Exception:
@@ -1301,21 +1659,22 @@ All interactive elements: {json.dumps(all_elements, indent=2)}
         try:
             # Try various ways to find and click the dropdown trigger
             trigger_selectors = [
-                selector,  # Original selector
-                f'button:has-text("{selector}")',
-                f'[aria-label*="{selector}"]',
-                f'[data-testid*="{selector.lower()}"]',
+                clean_selector,  # Original selector
+                f'button:has-text("{clean_selector}")',
+                f'[aria-label*="{clean_selector}"]',
+                f'[aria-label="{clean_selector}"]',
+                f'[data-testid*="{clean_selector.lower()}"]',
             ]
             
             # Try finding dropdown trigger by matching selector keywords
             # Extract key terms from selector (e.g., "priority" from "name=priority")
             selector_keywords = []
-            if "=" in selector:
+            if "=" in clean_selector:
                 # Extract the value part (e.g., "priority" from "name=priority")
-                selector_keywords.append(selector.split("=")[-1].lower())
+                selector_keywords.append(clean_selector.split("=")[-1].lower())
             else:
                 # Use the whole selector as a keyword
-                selector_keywords.append(selector.lower())
+                selector_keywords.append(clean_selector.lower())
             
             # Also try finding by the keyword in various attributes
             for keyword in selector_keywords:
@@ -1343,31 +1702,93 @@ All interactive elements: {json.dumps(all_elements, indent=2)}
             # If we couldn't find it by selector, try finding by keyword matching
             if not dropdown_clicked and selector_keywords:
                 try:
-                    # Find all buttons and clickable elements that might be the dropdown trigger
-                    buttons = await self.page.query_selector_all('button, [role="button"]')
-                    for btn in buttons:
+                    # First, try to find in modal context (where dropdowns usually are)
+                    modal_selectors = ['[role="dialog"]', '.modal', '[class*="Modal"]', '[class*="Dialog"]']
+                    modal = None
+                    for modal_selector in modal_selectors:
                         try:
-                            if await btn.is_visible():
-                                text = (await btn.text_content() or "").lower()
-                                aria_label = (await btn.get_attribute("aria-label") or "").lower()
-                                btn_id = (await btn.get_attribute("id") or "").lower()
-                                
-                                # Check if button text/aria-label/id contains any of our keywords
-                                matches_keyword = any(
-                                    keyword in text or keyword in aria_label or keyword in btn_id
-                                    for keyword in selector_keywords
-                                )
-                                
-                                # If it matches and is in a form context, it's likely the dropdown trigger
-                                if matches_keyword or (not text.strip() and any(keyword in aria_label for keyword in selector_keywords)):
-                                    await btn.click()
-                                    print(f"  ✅ Clicked dropdown trigger by keyword matching")
-                                    dropdown_clicked = True
-                                    await asyncio.sleep(0.5)
-                                    break
+                            modal = await self.page.query_selector(modal_selector)
+                            if modal:
+                                break
                         except Exception:
                             continue
-                except Exception:
+                    
+                    # Search in modal if found, otherwise entire page
+                    search_context = modal if modal else self.page
+                    
+                    # Find all buttons and clickable elements that might be the dropdown trigger
+                    buttons = await search_context.query_selector_all('button, [role="button"], [role="combobox"]')
+                    scored_buttons = []
+                    
+                    for btn in buttons:
+                        try:
+                            if not await btn.is_visible():
+                                continue
+                            
+                            text = (await btn.text_content() or "").strip().lower()
+                            aria_label = (await btn.get_attribute("aria-label") or "").strip().lower()
+                            btn_id = (await btn.get_attribute("id") or "").lower()
+                            btn_class = (await btn.get_attribute("class") or "").lower()
+                            
+                            score = 0
+                            matched = False
+                            
+                            # Check if button text/aria-label/id contains any of our keywords
+                            for keyword in selector_keywords:
+                                if keyword in aria_label:
+                                    # Exact match in aria-label gets highest score
+                                    if keyword == aria_label or aria_label.startswith(keyword):
+                                        score += 1000
+                                    else:
+                                        score += 500
+                                    matched = True
+                                elif keyword in text:
+                                    score += 300
+                                    matched = True
+                                elif keyword in btn_id:
+                                    score += 200
+                                    matched = True
+                                elif keyword in btn_class:
+                                    score += 100
+                                    matched = True
+                            
+                            # Bonus for buttons in modal/form context
+                            if modal:
+                                score += 100
+                            
+                            # Bonus for combobox role (common for dropdowns)
+                            role = await btn.get_attribute("role")
+                            if role == "combobox":
+                                score += 200
+                            
+                            if matched:
+                                scored_buttons.append({
+                                    "element": btn,
+                                    "score": score,
+                                    "aria_label": aria_label,
+                                    "text": text
+                                })
+                        except Exception:
+                            continue
+                    
+                    # Sort by score and click the best match
+                    if scored_buttons:
+                        scored_buttons.sort(key=lambda x: x["score"], reverse=True)
+                        best_btn = scored_buttons[0]
+                        
+                        if len(scored_buttons) > 1:
+                            print(f"  🔍 Found {len(scored_buttons)} potential dropdown triggers:")
+                            for i, btn_info in enumerate(scored_buttons[:3]):
+                                marker = "👉 SELECTED" if i == 0 else ""
+                                aria = btn_info["aria_label"] or btn_info["text"] or "No label"
+                                print(f"     {i+1}. '{aria}' (score: {btn_info['score']}) {marker}")
+                        
+                        await best_btn["element"].click()
+                        print(f"  ✅ Clicked dropdown trigger: '{best_btn['aria_label'] or best_btn['text']}'")
+                        dropdown_clicked = True
+                        await asyncio.sleep(0.5)
+                except Exception as e:
+                    print(f"  ⚠️  Error finding dropdown trigger: {e}")
                     pass
                     
         except Exception as e:
@@ -1531,6 +1952,171 @@ All interactive elements: {json.dumps(all_elements, indent=2)}
                 return True
         return False
     
+    async def discover(self):
+        """Discover and list all visible UI elements on the current page"""
+        print("  → Discovering visible UI elements...")
+        try:
+            elements = await self._extract_all_interactive_elements()
+            
+            print("  📋 Discovered elements:")
+            
+            # Show buttons
+            buttons = elements.get('buttons', [])
+            visible_buttons = [b for b in buttons if b.get('visible')]
+            if visible_buttons:
+                print(f"     Buttons ({len(visible_buttons)}):")
+                for btn in visible_buttons[:10]:  # Show first 10
+                    text = btn.get('text', '').strip()[:50] or 'No text'
+                    aria = btn.get('ariaLabel', '').strip() or 'No aria-label'
+                    print(f"       - '{text}' (aria-label: '{aria}')")
+            
+            # Show links
+            links = elements.get('links', [])
+            visible_links = [l for l in links if l.get('visible')]
+            if visible_links:
+                print(f"     Links ({len(visible_links)}):")
+                for link in visible_links[:10]:
+                    text = link.get('text', '').strip()[:50] or 'No text'
+                    href = link.get('href', '')[:50] or 'No href'
+                    print(f"       - '{text}' -> {href}")
+            
+            # Show inputs
+            inputs = elements.get('inputs', [])
+            visible_inputs = [i for i in inputs if i.get('visible')]
+            if visible_inputs:
+                print(f"     Inputs ({len(visible_inputs)}):")
+                for inp in visible_inputs[:5]:
+                    name = inp.get('name', '') or 'No name'
+                    placeholder = inp.get('placeholder', '')[:50] or 'No placeholder'
+                    print(f"       - name: '{name}', placeholder: '{placeholder}'")
+            
+            print(f"  ✅ Discovery complete: {len(visible_buttons)} buttons, {len(visible_links)} links, {len(visible_inputs)} inputs")
+        except Exception as e:
+            print(f"  ⚠️  Error during discovery: {e}")
+    
+    async def find(self, search_term: str):
+        """Find elements matching a search term (semantic search)"""
+        print(f"  → Finding elements matching: '{search_term}'")
+        try:
+            elements = await self._extract_all_interactive_elements()
+            search_lower = search_term.lower()
+            
+            matches = []
+            
+            # Search in buttons
+            buttons = elements.get('buttons', [])
+            for btn in buttons:
+                if not btn.get('visible'):
+                    continue
+                text = (btn.get('text', '') or '').lower()
+                aria = (btn.get('ariaLabel', '') or '').lower()
+                if search_lower in text or search_lower in aria or text in search_lower or aria in search_lower:
+                    matches.append({
+                        'type': 'button',
+                        'text': btn.get('text', ''),
+                        'ariaLabel': btn.get('ariaLabel', ''),
+                        'selector': f"text={btn.get('text', '')}" if btn.get('text') else f"[aria-label='{btn.get('ariaLabel', '')}']"
+                    })
+            
+            # Search in links
+            links = elements.get('links', [])
+            for link in links:
+                if not link.get('visible'):
+                    continue
+                text = (link.get('text', '') or '').lower()
+                href = (link.get('href', '') or '').lower()
+                if search_lower in text or search_lower in href or text in search_lower:
+                    matches.append({
+                        'type': 'link',
+                        'text': link.get('text', ''),
+                        'href': link.get('href', ''),
+                        'selector': f"text={link.get('text', '')}" if link.get('text') else f"a[href*='{link.get('href', '')[:30]}']"
+                    })
+            
+            if matches:
+                print(f"  ✅ Found {len(matches)} matching elements:")
+                for i, match in enumerate(matches[:5], 1):
+                    print(f"     {i}. {match['type']}: '{match.get('text', match.get('ariaLabel', 'No text'))}'")
+            else:
+                print(f"  ⚠️  No elements found matching '{search_term}'")
+            
+            return matches
+        except Exception as e:
+            print(f"  ⚠️  Error during find: {e}")
+            return []
+    
+    async def extract_text(self):
+        """Extract and display visible text from the current page"""
+        print("  → Extracting visible text from page...")
+        try:
+            # Get main content text
+            text_content = await self.page.evaluate("""
+                () => {
+                    // Get text from main content areas
+                    const mainContent = document.querySelector('main, [role="main"], .main-content, #main-content');
+                    if (mainContent) {
+                        return mainContent.innerText || mainContent.textContent || '';
+                    }
+                    // Fallback to body
+                    return document.body.innerText || document.body.textContent || '';
+                }
+            """)
+            
+            # Get headings
+            headings = await self.page.evaluate("""
+                () => {
+                    const headings = [];
+                    document.querySelectorAll('h1, h2, h3, h4, h5, h6').forEach(h => {
+                        if (h.offsetParent !== null) { // Only visible
+                            headings.push({
+                                level: h.tagName,
+                                text: h.textContent.trim()
+                            });
+                        }
+                    });
+                    return headings;
+                }
+            """)
+            
+            # Get button/link labels
+            interactive_labels = await self.page.evaluate("""
+                () => {
+                    const labels = [];
+                    document.querySelectorAll('button, a, [role="button"], [role="link"]').forEach(el => {
+                        if (el.offsetParent !== null) { // Only visible
+                            const text = el.textContent.trim();
+                            const ariaLabel = el.getAttribute('aria-label') || '';
+                            if (text || ariaLabel) {
+                                labels.push(text || ariaLabel);
+                            }
+                        }
+                    });
+                    return labels;
+                }
+            """)
+            
+            print("  📄 Page content summary:")
+            if headings:
+                print("     Headings:")
+                for h in headings[:10]:
+                    print(f"       {h['level']}: {h['text'][:60]}")
+            
+            if interactive_labels:
+                print(f"     Interactive elements ({len(interactive_labels)}):")
+                unique_labels = list(set(interactive_labels))[:15]
+                for label in unique_labels:
+                    if label:
+                        print(f"       - {label[:60]}")
+            
+            # Show first 200 chars of main content
+            if text_content:
+                preview = text_content[:200].replace('\n', ' ').strip()
+                print(f"     Content preview: {preview}...")
+            
+            print("  ✅ Text extraction complete")
+        except Exception as e:
+            print(f"  ⚠️  Error during text extraction: {e}")
+    
     async def is_logged_in(self, url: str) -> bool:
         """Check if user is already logged in by examining the page"""
         try:
@@ -1623,7 +2209,8 @@ All interactive elements: {json.dumps(all_elements, indent=2)}
     async def close(self):
         """Close the browser and save state"""
         if self.context:
-            # Save browser state (cookies, localStorage, etc.) for next session
+            # For persistent context, state is automatically saved to user_data_dir
+            # But we can also save a separate state file for compatibility
             storage_path = os.getenv("BROWSER_STORAGE_PATH", "browser_storage")
             os.makedirs(storage_path, exist_ok=True)
             state_file = os.path.join(storage_path, "state.json")
@@ -1632,9 +2219,17 @@ All interactive elements: {json.dumps(all_elements, indent=2)}
                 print(f"💾 Browser state saved to {state_file}")
             except Exception as e:
                 print(f"⚠️  Could not save browser state: {e}")
+            
+            # Close the persistent context (this also closes the browser)
+            await self.context.close()
         
-        if self.browser:
-            await self.browser.close()
+        # If we have a separate browser instance (non-persistent), close it
+        if self.browser and hasattr(self.browser, 'close'):
+            try:
+                await self.browser.close()
+            except Exception:
+                pass
+        
         if self.playwright:
             await self.playwright.stop()
         print("🔒 Browser closed")
