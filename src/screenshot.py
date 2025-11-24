@@ -16,6 +16,44 @@ class ScreenshotCapture:
         self.screenshot_dir = Path("screenshots")
         self.screenshot_dir.mkdir(exist_ok=True)
         self.counter = 0
+        self.last_screenshot_path = None  # Track last screenshot for duplicate detection
+    
+    def _should_skip_capture(self, description: str, capture_type: str) -> bool:
+        """
+        Determine if a screenshot should be skipped based on description.
+        Skips discovery/find/wait steps that don't change UI state.
+        
+        Args:
+            description: Description of the state
+            capture_type: Type of capture (before, after, final)
+            
+        Returns:
+            True if screenshot should be skipped, False otherwise
+        """
+        description_lower = description.lower()
+        
+        # Always capture final states
+        if capture_type == "final" or "final" in description_lower:
+            return False
+        
+        # Always capture login states
+        if "login" in description_lower or capture_type == "after-login":
+            return False
+        
+        # Skip discovery/find/wait steps - they don't change UI state
+        skip_keywords = [
+            "discover", "find", "extract", "identify", "locate", 
+            "search", "wait", "check", "verify", "read", "examine"
+        ]
+        
+        # Check if description contains skip keywords
+        if any(keyword in description_lower for keyword in skip_keywords):
+            # But allow if it's a meaningful action (e.g., "find and click" is different from just "find")
+            meaningful_actions = ["click", "type", "select", "submit", "navigate"]
+            if not any(action in description_lower for action in meaningful_actions):
+                return True
+        
+        return False
     
     async def capture(self, page: Page, description: str, capture_type: str = "state") -> dict:
         """
@@ -27,8 +65,13 @@ class ScreenshotCapture:
             capture_type: Type of capture (before, after, final)
             
         Returns:
-            Screenshot metadata dictionary
+            Screenshot metadata dictionary or None if skipped
         """
+        # Check if we should skip this capture
+        if self._should_skip_capture(description, capture_type):
+            print(f"  ⏭️  Skipped: {description} ({capture_type}) - no UI state change")
+            return None
+        
         self.counter += 1
         
         # Create filename
@@ -49,6 +92,9 @@ class ScreenshotCapture:
         )
         
         print(f"  📸 Captured: {description} ({capture_type})")
+        
+        # Update last screenshot path
+        self.last_screenshot_path = str(filepath)
         
         return {
             "path": str(filepath),
@@ -104,4 +150,5 @@ class ScreenshotCapture:
     def reset(self):
         """Reset counter (useful for new tasks)"""
         self.counter = 0
+        self.last_screenshot_path = None
 

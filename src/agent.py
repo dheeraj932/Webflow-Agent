@@ -128,7 +128,9 @@ class AgentB:
                         step["description"],
                         "after"
                     )
-                    self.captured_states.append(screenshot)
+                    # Only append if screenshot was actually captured (not skipped)
+                    if screenshot:
+                        self.captured_states.append(screenshot)
                 
                 # Verify form submissions
                 await self._verify_form_submission(step, task_plan)
