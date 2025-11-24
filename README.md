@@ -33,7 +33,6 @@ This system implements **Agent B**, which receives natural language questions fr
 ├── screenshots/             # Temporary screenshot storage
 ├── requirements.txt
 ├── main.py                  # Main entry point
-├── test.py                  # Test runner
 └── README.md
 ```
 
@@ -149,13 +148,13 @@ dataset/
 
 ## Testing
 
-Run example workflows:
+You can test the system by running tasks directly:
 
 ```bash
-python test.py
+python main.py "How do I create a project in Linear?"
 ```
 
-This will execute predefined test tasks and capture their UI states.
+This will execute the task and capture UI states.
 
 ## Features
 
